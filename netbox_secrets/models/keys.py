@@ -20,10 +20,22 @@ from django.utils.translation import gettext_lazy as _
 
 from netbox.models import NetBoxModel
 from utilities.querysets import RestrictedQuerySet
-from ..constants import CENSOR_MASTER_KEY, CENSOR_MASTER_KEY_CHANGED, get_public_key_size
+from ..constants import (
+    CENSOR_MASTER_KEY,
+    CENSOR_MASTER_KEY_CHANGED,
+    get_master_password_scrypt_n,
+    get_public_key_size,
+)
 from ..exceptions import InvalidKey
 from ..querysets import UserKeyQuerySet
-from ..utils import decrypt_master_key, encrypt_master_key, generate_random_key
+from ..utils import (
+    decrypt_master_key,
+    encrypt_master_key,
+    generate_random_key,
+    lock_private_key,
+    private_key_matches,
+    unlock_private_key,
+)
 
 __all__ = [
     'UserKey',
@@ -42,6 +54,7 @@ class UserKey(NetBoxModel):
         user: The user who owns this encryption key
         public_key: RSA public key in PEM format
         master_key_cipher: Encrypted copy of the master encryption key
+        encrypted_private_key: Optional copy of the user's private key, locked with their master password
         created: Timestamp when the key was created
         modified: Timestamp when the key was last modified
     """
@@ -59,6 +72,12 @@ class UserKey(NetBoxModel):
     )
     master_key_cipher = models.BinaryField(
         max_length=512, blank=True, null=True, editable=False, help_text=_("Encrypted copy of the master key")
+    )
+    encrypted_private_key = models.TextField(
+        blank=True,
+        null=True,
+        editable=False,
+        help_text=_("Private key encrypted with the user's master password (PKCS#8, scrypt + AES-256-GCM)"),
     )
 
     objects = UserKeyQuerySet.as_manager()
@@ -153,12 +172,20 @@ class UserKey(NetBoxModel):
         if self._initial_master_key_cipher and self.public_key != self._initial_public_key:
             self.master_key_cipher = None
 
+        # A stored private key no longer matches a changed public key
+        if self.pk and self.public_key != self._initial_public_key:
+            self.encrypted_private_key = None
+
         # Auto-activate first UserKey with new master key
         if self.is_filled() and not self.is_active() and not UserKey.objects.active().exists():
             master_key = generate_random_key()
             self.master_key_cipher = encrypt_master_key(master_key, self.public_key)
 
         super().save(*args, **kwargs)
+
+        # Reset change tracking so later saves on this instance compare against what is stored
+        self._initial_public_key = self.public_key
+        self._initial_master_key_cipher = self.master_key_cipher
 
     def delete(self, *args, **kwargs):
         """
@@ -197,6 +224,9 @@ class UserKey(NetBoxModel):
 
         for data_attr in ['prechange_data', 'postchange_data']:
             data = getattr(objectchange, data_attr, None) or {}
+
+            if 'encrypted_private_key' in data:
+                data['encrypted_private_key'] = CENSOR_MASTER_KEY if data['encrypted_private_key'] else None
 
             if 'master_key_cipher' in data:
                 # Mark as changed if value differs from previous
@@ -251,6 +281,53 @@ class UserKey(NetBoxModel):
             return decrypt_master_key(force_bytes(self.master_key_cipher), private_key)
         except (ValueError, Exception):
             return None
+
+    def has_master_password(self) -> bool:
+        """
+        Check if the user has set a master password for their private key.
+
+        Returns:
+            True if an encrypted private key is stored, False otherwise
+        """
+        return bool(self.encrypted_private_key)
+
+    has_master_password.boolean = True
+
+    def set_master_password(self, private_key: str, master_password: str) -> None:
+        """
+        Lock a copy of the user's private key with a master password and store it.
+
+        Args:
+            private_key: User's RSA private key in PEM format
+            master_password: Password used to lock the private key
+
+        Raises:
+            ValueError: If the private key does not belong to this UserKey
+        """
+        if not self.public_key or not private_key_matches(private_key, self.public_key):
+            raise ValueError(_("The private key does not match this user key."))
+
+        self.encrypted_private_key = lock_private_key(private_key, master_password, get_master_password_scrypt_n())
+        self.save()
+
+    def clear_master_password(self) -> None:
+        """Remove the stored, password-locked private key."""
+        self.encrypted_private_key = None
+        self.save()
+
+    def unlock_private_key(self, master_password: str) -> Optional[str]:
+        """
+        Unlock the stored private key with the master password.
+
+        Args:
+            master_password: The user's master password
+
+        Returns:
+            Private key in PEM format, or None if no master password is set or the password is wrong
+        """
+        if not self.encrypted_private_key:
+            return None
+        return unlock_private_key(self.encrypted_private_key, master_password)
 
     @transaction.atomic
     def activate(self, master_key: bytes) -> None:

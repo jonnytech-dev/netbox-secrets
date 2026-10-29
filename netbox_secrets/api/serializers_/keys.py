@@ -10,6 +10,9 @@ from users.api.serializers import UserSerializer
 
 __all__ = [
     'ActivateUserKeySerializer',
+    'MasterPasswordRemoveSerializer',
+    'MasterPasswordSerializer',
+    'MasterPasswordStatusSerializer',
     'SessionKeyCreateSerializer',
     'SessionKeySerializer',
     'UserKeySerializer',
@@ -115,7 +118,16 @@ class SessionKeyCreateSerializer(serializers.ModelSerializer):
     """
 
     private_key = serializers.CharField(
-        write_only=True, required=True, help_text="User's RSA private key in PEM format"
+        write_only=True,
+        required=False,
+        help_text="User's RSA private key in PEM format (provide this or master_password)",
+    )
+    master_password = serializers.CharField(
+        write_only=True,
+        required=False,
+        trim_whitespace=False,
+        style={'input_type': 'password'},
+        help_text="User's master password, which unlocks their stored private key (provide this or private_key)",
     )
     preserve_key = serializers.BooleanField(
         default=False,
@@ -126,18 +138,25 @@ class SessionKeyCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = SessionKey
-        fields = ['private_key', 'preserve_key']
+        fields = ['private_key', 'master_password', 'preserve_key']
 
 
 class ActivateUserKeySerializer(serializers.Serializer):
     """Serializer for activating user keys."""
 
     private_key = serializers.CharField(
-        required=True,
+        required=False,
         write_only=True,
         help_text="Administrator's RSA private key in PEM format for deriving master key",
         min_length=1,
         trim_whitespace=True,
+    )
+    master_password = serializers.CharField(
+        required=False,
+        write_only=True,
+        trim_whitespace=False,
+        style={'input_type': 'password'},
+        help_text="Administrator's master password (alternative to private_key)",
     )
     user_key_ids = serializers.ListField(
         child=serializers.IntegerField(min_value=1),
@@ -147,6 +166,80 @@ class ActivateUserKeySerializer(serializers.Serializer):
         max_length=100,
     )
 
+    def validate(self, attrs):
+        if not attrs.get('private_key') and not attrs.get('master_password'):
+            raise serializers.ValidationError("Provide your private key or your master password.")
+        return attrs
+
     def validate_user_key_ids(self, value):
         """Remove duplicates while preserving order."""
         return list(dict.fromkeys(value))
+
+
+class MasterPasswordStatusSerializer(serializers.Serializer):
+    """Whether the current user has a master password and whether the feature is enabled."""
+
+    enabled = serializers.BooleanField(read_only=True)
+    has_master_password = serializers.BooleanField(read_only=True)
+    min_length = serializers.IntegerField(read_only=True)
+
+
+class MasterPasswordSerializer(serializers.Serializer):
+    """
+    Set or change the current user's master password.
+
+    Prove ownership with either the private key or the current master password.
+    """
+
+    private_key = serializers.CharField(
+        write_only=True, required=False, help_text="User's RSA private key in PEM format"
+    )
+    current_master_password = serializers.CharField(
+        write_only=True,
+        required=False,
+        trim_whitespace=False,
+        style={'input_type': 'password'},
+        help_text="Current master password (alternative to private_key when changing it)",
+    )
+    master_password = serializers.CharField(
+        write_only=True,
+        required=True,
+        trim_whitespace=False,
+        style={'input_type': 'password'},
+        help_text="New master password",
+    )
+    master_password_confirm = serializers.CharField(
+        write_only=True,
+        required=True,
+        trim_whitespace=False,
+        style={'input_type': 'password'},
+        help_text="New master password, repeated",
+    )
+
+    def validate(self, attrs):
+        from netbox_secrets.constants import get_master_password_min_length
+
+        if not attrs.get('private_key') and not attrs.get('current_master_password'):
+            raise serializers.ValidationError("Provide your private key or your current master password.")
+        if attrs['master_password'] != attrs['master_password_confirm']:
+            raise serializers.ValidationError({'master_password_confirm': "Passwords do not match."})
+        min_length = get_master_password_min_length()
+        if len(attrs['master_password']) < min_length:
+            raise serializers.ValidationError(
+                {'master_password': f"Master password must be at least {min_length} characters."}
+            )
+        return attrs
+
+
+class MasterPasswordRemoveSerializer(serializers.Serializer):
+    """Remove the current user's master password. Requires the private key or current master password."""
+
+    private_key = serializers.CharField(write_only=True, required=False)
+    current_master_password = serializers.CharField(
+        write_only=True, required=False, trim_whitespace=False, style={'input_type': 'password'}
+    )
+
+    def validate(self, attrs):
+        if not attrs.get('private_key') and not attrs.get('current_master_password'):
+            raise serializers.ValidationError("Provide your private key or your current master password.")
+        return attrs

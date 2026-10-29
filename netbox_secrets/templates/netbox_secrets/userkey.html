@@ -1,5 +1,6 @@
 {% extends 'generic/object.html' %}
 {% load perms %}
+{% load secrets_tags %}
 
 {% block breadcrumbs %}
 {% endblock %}
@@ -133,4 +134,57 @@
             {% endif %}
         {% endif %}
     </div>
+    {% if object.user == request.user and object.is_filled %}
+        {% master_password_state as mp %}
+        {% if mp.enabled %}
+            <div class="row mb-3">
+                <div class="col col-md-6">
+                    <div class="card">
+                        <h5 class="card-header">Master Password</h5>
+                        <div class="card-body">
+                            <table class="table table-hover">
+                                <tr>
+                                    <th scope="row">Status</th>
+                                    <td>
+                                        {% if mp.has_master_password %}
+                                            <i class="mdi mdi-check-circle text-success"></i> Set
+                                        {% else %}
+                                            <i class="mdi mdi-close-circle text-secondary"></i> Not set
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                            </table>
+                            <p class="small text-muted mb-0">
+                                Your master password unlocks your private key, so you can type it instead of pasting
+                                the key. It is not your NetBox login. If you forget it, use your private key to set a new one.
+                            </p>
+                        </div>
+                        <div class="card-footer">
+                            <div class="text-end noprint">
+                                {% if mp.has_master_password %}
+                                    <button type="button" class="btn btn-sm btn-danger master-password-action"
+                                            data-action="remove">
+                                        <i class="mdi mdi-trash-can-outline" aria-hidden="true"></i> Remove
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-warning master-password-action"
+                                            data-action="set">
+                                        <i class="mdi mdi-pencil" aria-hidden="true"></i> Change
+                                    </button>
+                                {% else %}
+                                    <button type="button" class="btn btn-sm btn-primary master-password-action"
+                                            data-action="set">
+                                        <i class="mdi mdi-plus-thick" aria-hidden="true"></i> Set Master Password
+                                    </button>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% include 'netbox_secrets/inc/master_password_modal.html' %}
+            {% if not object.is_active %}
+                {% include 'netbox_secrets/inc/secrets_inline_js.html' %}
+            {% endif %}
+        {% endif %}
+    {% endif %}
 {% endblock content %}

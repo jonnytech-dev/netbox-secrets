@@ -246,18 +246,32 @@ class ActivateUserKeyForm(forms.Form):
             }
         ),
         label=_('Your Private Key'),
+        required=False,
         help_text=_(
             'Enter your private RSA key in PEM format to activate the selected user keys. '
-            'This key will not be stored.'
+            'This key will not be stored. Leave blank if you use your master password instead.'
         ),
     )
+    master_password = forms.CharField(
+        widget=forms.PasswordInput(attrs={'class': 'form-control', 'autocomplete': 'off'}),
+        label=_('Or Your Master Password'),
+        required=False,
+        strip=False,
+        help_text=_('Unlocks your stored private key. Not your NetBox login password.'),
+    )
+
+    def clean(self):
+        cleaned_data = super().clean()
+        if not cleaned_data.get('secret_key') and not cleaned_data.get('master_password'):
+            raise ValidationError(_("Enter your private key or your master password."))
+        return cleaned_data
 
     def clean_secret_key(self):
         """Validate the private key."""
         key = self.cleaned_data.get('secret_key', '').strip()
 
         if not key:
-            raise ValidationError(_("Private key is required."))
+            return key
 
         # Validate the RSA key format
         try:

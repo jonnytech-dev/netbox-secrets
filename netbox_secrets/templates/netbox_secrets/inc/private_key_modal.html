@@ -1,30 +1,75 @@
+{% load secrets_tags %}
+{% master_password_state as mp %}
 <div
     class="modal fade"
     id="privkey_modal"
     tabindex="-1"
     role="dialog"
     data-session-key-present="{{ session_key_present|yesno:'true,false' }}"
+    data-unlock-mode="{% if mp.enabled and mp.has_master_password %}password{% else %}key{% endif %}"
 >
     <div class="modal-dialog modal-md" role="document">
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title" id="privkey_modal_title">
                     <span class="mdi mdi-lock" aria-hidden="true"></span>
-                    Enter Private RSA Key
+                    Unlock Secrets
                 </h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
                 <p class="small text-muted">
-                    You do not have an active session key. To request one, please provide your private RSA key below.
+                    You do not have an active session key. Unlock with your master password or your private RSA key.
                     Once retrieved, your session key will be saved for future requests.
                 </p>
-                <div class="form-group">
-                    <textarea class="form-control font-monospace" id="user_privkey" style="height: 300px;"></textarea>
+                {% if mp.enabled %}
+                    <ul class="nav nav-tabs mb-3" role="tablist">
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link{% if mp.has_master_password %} active{% endif %}" id="unlock_tab_password"
+                                    data-bs-toggle="tab" data-bs-target="#unlock_pane_password" data-unlock-mode="password"
+                                    type="button" role="tab" aria-controls="unlock_pane_password"
+                                    aria-selected="{{ mp.has_master_password|yesno:'true,false' }}">
+                                <i class="mdi mdi-form-textbox-password"></i> Master Password
+                            </button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link{% if not mp.has_master_password %} active{% endif %}" id="unlock_tab_key"
+                                    data-bs-toggle="tab" data-bs-target="#unlock_pane_key" data-unlock-mode="key"
+                                    type="button" role="tab" aria-controls="unlock_pane_key"
+                                    aria-selected="{{ mp.has_master_password|yesno:'false,true' }}">
+                                <i class="mdi mdi-key-variant"></i> Private Key
+                            </button>
+                        </li>
+                    </ul>
+                {% endif %}
+                <div class="tab-content">
+                    {% if mp.enabled %}
+                        <div class="tab-pane fade{% if mp.has_master_password %} show active{% endif %}"
+                             id="unlock_pane_password" role="tabpanel" aria-labelledby="unlock_tab_password">
+                            {% if mp.has_master_password %}
+                                <div class="form-group">
+                                    <input type="password" class="form-control" id="user_master_password"
+                                           autocomplete="off" placeholder="Master password">
+                                </div>
+                            {% else %}
+                                <p class="small mb-0">
+                                    You have not set a master password. Use your private key, then set one on your
+                                    <a href="{% url 'plugins:netbox_secrets:userkey_list' %}">User Key</a> page.
+                                </p>
+                            {% endif %}
+                        </div>
+                    {% endif %}
+                    <div class="tab-pane fade{% if not mp.enabled or not mp.has_master_password %} show active{% endif %}"
+                         id="unlock_pane_key" role="tabpanel" aria-labelledby="unlock_tab_key">
+                        <div class="form-group">
+                            <textarea class="form-control font-monospace" id="user_privkey" style="height: 300px;"
+                                      placeholder="-----BEGIN RSA PRIVATE KEY-----"></textarea>
+                        </div>
+                    </div>
                 </div>
             </div>
             <div class="modal-footer float-end">
-                <button id="request_session_key" class="btn btn-primary" data-bs-dismiss="modal">
+                <button id="request_session_key" class="btn btn-primary">
                     <i class="mdi mdi-key"></i> Request Session Key
                 </button>
             </div>

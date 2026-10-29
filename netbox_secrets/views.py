@@ -30,7 +30,7 @@ from utilities.views import GetRelatedModelsMixin, GetReturnURLMixin, ViewTab, r
 from . import exceptions, filtersets, forms, tables, utils
 from .constants import get_public_key_size
 from .models import Secret, SecretRole, SessionKey, UserKey
-
+from .utils.unlock import resolve_private_key
 
 #
 # Secret roles
@@ -461,14 +461,19 @@ class ActivateUserkeyView(LoginRequiredMixin, GetReturnURLMixin, View):
 
         form = forms.ActivateUserKeyForm(request.POST)
         if form.is_valid():
-            master_key = self.userkey.get_master_key(form.cleaned_data['secret_key'])
+            private_key, error = resolve_private_key(
+                request.user,
+                self.userkey,
+                form.cleaned_data.get('secret_key'),
+                form.cleaned_data.get('master_password'),
+            )
+            master_key = self.userkey.get_master_key(private_key) if private_key else None
             user_keys = form.cleaned_data['user_keys']
             if master_key:
                 for user_key in user_keys:
                     user_key.activate(master_key)
-                    messages.success(request, f"Successfully activated {len(user_keys)} user keys.")
-                    return redirect("plugins:netbox_secrets:userkey_list")
-            else:
-                messages.error(request, "Invalid Private Key.")
+                messages.success(request, f"Successfully activated {len(user_keys)} user keys.")
+                return redirect("plugins:netbox_secrets:userkey_list")
+            messages.error(request, error or "Invalid Private Key.")
 
         return render(request, self.template_name, {'form': form})

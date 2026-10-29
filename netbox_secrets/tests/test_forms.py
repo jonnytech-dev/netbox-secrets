@@ -173,10 +173,15 @@ class ActivateUserKeyFormTestCase(TestCase):
         self.assertFalse(form.is_valid())
 
     def test_activate_user_key_clean_secret_key_empty(self):
+        # A blank private key is allowed at the field level (a master password may be used instead)
         form = ActivateUserKeyForm(data={'secret_key': PRIVATE_KEY, 'user_keys': []})
         form.cleaned_data = {'secret_key': '   '}
-        with self.assertRaises(Exception):
-            form.clean_secret_key()
+        self.assertEqual(form.clean_secret_key(), '')
+
+    def test_activate_user_key_requires_key_or_master_password(self):
+        form = ActivateUserKeyForm(data={'secret_key': '', 'master_password': '', 'user_keys': []})
+        self.assertFalse(form.is_valid())
+        self.assertIn('Enter your private key or your master password.', str(form.errors))
 
 
 class BulkFormsTestCase(TestCase):

@@ -39,3 +39,40 @@ def get_public_key_size() -> int:
     """Return the configured minimum RSA public key size."""
     plugin_settings = settings.PLUGINS_CONFIG.get("netbox_secrets") or {}
     return int(plugin_settings.get("public_key_size", DEFAULT_KEY_SIZE))
+
+
+# Master password settings
+DEFAULT_MASTER_PASSWORD_MIN_LENGTH = 12
+DEFAULT_MASTER_PASSWORD_MAX_ATTEMPTS = 5
+DEFAULT_MASTER_PASSWORD_LOCKOUT_SECONDS = 900
+DEFAULT_MASTER_PASSWORD_SCRYPT_N = 2**17  # ~128 MiB, ~0.5s on a modern CPU
+
+
+def _master_password_setting(name, default):
+    plugin_settings = settings.PLUGINS_CONFIG.get("netbox_secrets") or {}
+    return plugin_settings.get(name, default)
+
+
+def master_password_enabled() -> bool:
+    """Return True if users may unlock their private key with a master password."""
+    return bool(_master_password_setting("master_password_enabled", True))
+
+
+def get_master_password_min_length() -> int:
+    return int(_master_password_setting("master_password_min_length", DEFAULT_MASTER_PASSWORD_MIN_LENGTH))
+
+
+def get_master_password_max_attempts() -> int:
+    return int(_master_password_setting("master_password_max_attempts", DEFAULT_MASTER_PASSWORD_MAX_ATTEMPTS))
+
+
+def get_master_password_lockout_seconds() -> int:
+    return int(_master_password_setting("master_password_lockout_seconds", DEFAULT_MASTER_PASSWORD_LOCKOUT_SECONDS))
+
+
+def get_master_password_scrypt_n() -> int:
+    """scrypt cost (N). Must be a power of two. Only affects newly locked keys."""
+    value = int(_master_password_setting("master_password_scrypt_n", DEFAULT_MASTER_PASSWORD_SCRYPT_N))
+    if value < 2**14 or value & (value - 1):
+        raise ValueError("master_password_scrypt_n must be a power of two and at least 16384.")
+    return value

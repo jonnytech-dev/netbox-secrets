@@ -4,7 +4,7 @@ from typing import Optional
 
 from Crypto.PublicKey import RSA
 from django.db import transaction
-from django.http import HttpResponseBadRequest
+from django.http import HttpResponse, HttpResponseBadRequest
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import mixins as drf_mixins, status
@@ -17,8 +17,10 @@ from rest_framework.viewsets import GenericViewSet, ViewSet
 
 from netbox.api.viewsets import BaseViewSet, NetBoxModelViewSet, mixins
 from netbox_secrets.constants import *
+from netbox_secrets.utils.unlock import *
 from netbox_secrets.exceptions import InvalidKey
 from netbox_secrets.models import Secret, SecretRole, SessionKey, UserKey
+from netbox_secrets.utils import private_key_matches
 from . import serializers
 from .. import filtersets
 
@@ -54,7 +56,7 @@ class UserKeyViewSet(NetBoxModelViewSet):
         summary="Bulk activate user keys",
         description=(
             "Activates multiple user keys using the administrator's private key "
-            "to derive the master key. All activations are performed atomically.\n\n"
+            "(or master password) to derive the master key. All activations are performed atomically.\n\n"
             "This is a bulk operation and requires the `change_userkey` permission."
         ),
         request=serializers.ActivateUserKeySerializer,
@@ -98,7 +100,6 @@ class UserKeyViewSet(NetBoxModelViewSet):
         serializer = serializers.ActivateUserKeySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        private_key = serializer.validated_data['private_key']
         user_key_ids = serializer.validated_data['user_key_ids']
 
         # Validate requesting user's own key
@@ -109,6 +110,21 @@ class UserKeyViewSet(NetBoxModelViewSet):
 
         if not admin_key.is_active():
             return Response({'error': ERR_USERKEY_INACTIVE}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Use the pasted private key, or unlock the stored one with the master password
+        private_key, error = resolve_private_key(
+            request.user,
+            admin_key,
+            serializer.validated_data.get('private_key'),
+            serializer.validated_data.get('master_password'),
+        )
+        if error:
+            http_status = (
+                status.HTTP_429_TOO_MANY_REQUESTS
+                if error == ERR_MASTER_PASSWORD_LOCKED
+                else status.HTTP_400_BAD_REQUEST
+            )
+            return Response({'error': error}, status=http_status)
 
         # Derive master key
         master_key = admin_key.get_master_key(private_key)
@@ -153,6 +169,85 @@ class UserKeyViewSet(NetBoxModelViewSet):
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+    @extend_schema(
+        summary="Manage your master password",
+        description=(
+            "GET returns whether you have a master password set.\n\n"
+            "POST sets or changes your master password. Prove ownership with `private_key` "
+            "or `current_master_password`.\n\n"
+            "DELETE removes your master password. Requires `private_key` or `current_master_password`.\n\n"
+            "The master password locks a copy of your private key. It is not your NetBox login password."
+        ),
+        request=serializers.MasterPasswordSerializer,
+        responses={
+            200: serializers.MasterPasswordStatusSerializer,
+            400: OpenApiResponse(description="Validation failed"),
+            429: OpenApiResponse(description=ERR_MASTER_PASSWORD_LOCKED),
+        },
+    )
+    @action(
+        detail=False,
+        methods=['get', 'post', 'delete'],
+        url_path='master-password',
+        permission_classes=[IsAuthenticated],
+    )
+    def master_password(self, request):
+        """
+        /api/plugins/secrets/user-keys/master-password/
+
+        Acts only on the requesting user's own UserKey.
+        """
+        user_key = UserKey.objects.filter(user=request.user).first()
+
+        def status_response(http_status=status.HTTP_200_OK):
+            data = {
+                'enabled': master_password_enabled(),
+                'has_master_password': bool(user_key and user_key.has_master_password()),
+                'min_length': get_master_password_min_length(),
+            }
+            return Response(serializers.MasterPasswordStatusSerializer(data).data, status=http_status)
+
+        if request.method == 'GET':
+            return status_response()
+
+        if not master_password_enabled():
+            return Response({'error': ERR_MASTER_PASSWORD_DISABLED}, status=status.HTTP_400_BAD_REQUEST)
+        if user_key is None or not user_key.is_filled():
+            return Response({'error': ERR_USERKEY_MISSING}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer_class = (
+            serializers.MasterPasswordSerializer
+            if request.method == 'POST'
+            else serializers.MasterPasswordRemoveSerializer
+        )
+        serializer = serializer_class(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        # Prove ownership: a pasted private key that matches, or the current master password
+        if data.get('private_key'):
+            private_key = data['private_key']
+            if not private_key_matches(private_key, user_key.public_key):
+                return Response({'error': ERR_PRIVKEY_INVALID}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            private_key, error = resolve_private_key(
+                request.user, user_key, master_password=data.get('current_master_password')
+            )
+            if error:
+                http_status = (
+                    status.HTTP_429_TOO_MANY_REQUESTS
+                    if error == ERR_MASTER_PASSWORD_LOCKED
+                    else status.HTTP_400_BAD_REQUEST
+                )
+                return Response({'error': error}, status=http_status)
+
+        if request.method == 'POST':
+            user_key.set_master_password(private_key, data['master_password'])
+        else:
+            user_key.clear_master_password()
+
+        return status_response()
 
 
 #
@@ -372,8 +467,11 @@ class SessionKeyViewSet(GenericViewSet):
                     OpenApiExample(name=ERR_USERKEY_MISSING, value=ERR_USERKEY_MISSING),
                     OpenApiExample(name=ERR_USERKEY_INACTIVE, value=ERR_USERKEY_INACTIVE),
                     OpenApiExample(name=ERR_PRIVKEY_INVALID, value=ERR_PRIVKEY_INVALID),
+                    OpenApiExample(name=ERR_MASTER_PASSWORD_INVALID, value=ERR_MASTER_PASSWORD_INVALID),
+                    OpenApiExample(name=ERR_MASTER_PASSWORD_NOT_SET, value=ERR_MASTER_PASSWORD_NOT_SET),
                 ],
             ),
+            429: OpenApiResponse(description=ERR_MASTER_PASSWORD_LOCKED),
         },
     )
     def create(self, request):
@@ -381,7 +479,7 @@ class SessionKeyViewSet(GenericViewSet):
         POST /api/session-key/
         Create a new session key for the current user.
 
-        Requires the user's private key to derive the master key.
+        Requires the user's private key, or their master password if one is set, to derive the master key.
         Optionally preserves an existing session key instead of creating a new one.
 
         Returns:
@@ -389,9 +487,10 @@ class SessionKeyViewSet(GenericViewSet):
         """
         # Validate input
         private_key = request.data.get('private_key')
+        master_password = request.data.get('master_password')
         preserve_key = str(request.data.get('preserve_key', False)).lower() in ['true', 'yes', '1']
 
-        if not private_key:
+        if not private_key and not master_password:
             return HttpResponseBadRequest(ERR_PRIVKEY_MISSING)
 
         # Validate user key
@@ -402,6 +501,12 @@ class SessionKeyViewSet(GenericViewSet):
 
         if not user_key.is_active():
             return HttpResponseBadRequest(ERR_USERKEY_INACTIVE)
+
+        # Use the pasted private key, or unlock the stored one with the master password
+        private_key, error = resolve_private_key(request.user, user_key, private_key, master_password)
+        if error:
+            status_code = 429 if error == ERR_MASTER_PASSWORD_LOCKED else 400
+            return HttpResponse(error, status=status_code, content_type='text/plain')
 
         # Validate private key and get master key
         master_key = user_key.get_master_key(private_key)
