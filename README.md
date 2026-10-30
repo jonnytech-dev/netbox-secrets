@@ -2,6 +2,10 @@
 
 A fork of [netbox-secrets](https://github.com/Onemind-Services-LLC/netbox-secrets) v3.1.2.
 
+## Current Environment
+The current Netbox environment this fork is targeted for is Netbox 4.6.1.
+This fork may still work for newer versions, try at your own risk.
+
 ## Why
 
 The native netbox-secrets plugin makes you paste your full RSA private key every time you unlock secrets. That's slow. I personally like a password manager apporach where there is one master password that unlocks all of your passwords (ex. NordPass, 1Password, etc).
