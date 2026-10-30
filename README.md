@@ -1,3 +1,29 @@
+# NetBox Secrets — Master Password Fork
+
+A fork of [netbox-secrets](https://github.com/Onemind-Services-LLC/netbox-secrets) v3.1.2.
+
+## Why
+
+The native netbox-secrets plugin makes you paste your full RSA private key every time you unlock secrets. That's slow. I personally like a password manager apporach where there is one master password that unlocks all of your passwords (ex. NordPass, 1Password, etc).
+
+The fork of this plugin does exactly that. I've added a master password option when creating the RSA private key (user key).
+The same process of creating a user key exists. You can choose to use the private key or the master password. 
+I recommend saving the private key somewhere secure, then using the master password for general use.
+
+## What changed
+
+- **Master password.** Each user can set a master password that unlocks their private key. Type the password instead of pasting the key. Pasting the key still works.
+- **Not your login.** The master password is separate from your NetBox account.
+- **Same access.** Users still only see the secrets their permissions allow.
+- **Lockout.** Too many wrong passwords blocks master password unlock for a while.
+- **Bug fix.** The Activate User Keys page now activates every selected key, not just the first.
+
+Details: [docs/master-password.md](docs/master-password.md)
+
+---
+
+*Upstream README below.*
+
 # NetBox Secrets
 
 NetBox Secrets is a NetBox plugin for securely storing and managing secrets (passwords, API keys, tokens, certificates, etc.)
