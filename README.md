@@ -8,7 +8,7 @@ This fork may still work for newer versions, try at your own risk.
 
 ## Why
 
-The native netbox-secrets plugin makes you paste your full RSA private key every time you unlock secrets. That's slow. I personally like a password manager apporach where there is one master password that unlocks all of your passwords (ex. NordPass, 1Password, etc).
+The native netbox-secrets plugin makes you paste your full RSA private key every time you unlock secrets. That's slow. I personally like a password manager approach where there is one master password that unlocks all of your passwords (ex. NordPass, 1Password, etc).
 
 The fork of this plugin does exactly that. I've added a master password option when creating the RSA private key (user key).
 The same process of creating a user key exists. You can choose to use the private key or the master password. 
